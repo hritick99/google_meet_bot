@@ -6,12 +6,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import time
-from record_audio import AudioRecorder
-from speech_to_text import SpeechToText
 import os
 import tempfile
-
-
+from record_audio import AudioRecorder
+from speech_to_text import SpeechToText
 
 class JoinGoogleMeet:
     def __init__(self):
@@ -28,7 +26,6 @@ class JoinGoogleMeet:
             "profile.default_content_setting_values.notifications": 1
         })
         self.driver = webdriver.Chrome(options=opt)
-
 
     def Glogin(self):
         # Login Page
@@ -51,23 +48,31 @@ class JoinGoogleMeet:
         self.driver.implicitly_wait(100)
         print("Gmail login activity: Done")
  
- 
     def turnOffMicCam(self, meet_link):
-        # Navigate to Google Meet URL (replace with your meeting URL)
+        # Navigate to Google Meet URL
         self.driver.get(meet_link)
-        # turn off Microphone
-        time.sleep(2)
-        self.driver.find_element(By.CSS_SELECTOR, 'div[jscontroller="t2mBxb"][data-anchor-id="hw0c9"]').click()
-        self.driver.implicitly_wait(3000)
-        print("Turn of mic activity: Done")
-    
-        # turn off camera
-        time.sleep(1)
-        self.driver.find_element(By.CSS_SELECTOR, 'div[jscontroller="bwqwSd"][data-anchor-id="psRWwc"]').click()
-        self.driver.implicitly_wait(3000)
-        print("Turn of camera activity: Done")
- 
- 
+        time.sleep(3)  # Allow time for page to load
+        
+        # Turn off Microphone
+        try:
+            mic_button = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 'div[role="button"][aria-label="Turn off microphone"]'))
+            )
+            mic_button.click()
+            print("Microphone turned off.")
+        except TimeoutException:
+            print("Mic button not found or failed to click.")
+
+        # Turn off Camera
+        try:
+            camera_button = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 'div[role="button"][aria-label="Turn off camera"]'))
+            )
+            camera_button.click()
+            print("Camera turned off.")
+        except TimeoutException:
+            print("Camera button not found or failed to click.")
+
     def checkIfJoined(self):
         try:
             # Wait for the join button to appear
@@ -78,33 +83,41 @@ class JoinGoogleMeet:
         except (TimeoutException, NoSuchElementException):
             print("Meeting has not been joined")
 
-    
     def AskToJoin(self, audio_path, duration):
         # Ask to Join meet
-        time.sleep(5)
-        self.driver.implicitly_wait(2000)
-        self.driver.find_element(By.CSS_SELECTOR, 'button[jsname="Qx7uuf"]').click()
-        print("Ask to join activity: Done")
-        # checkIfJoined()
-        # Ask to join and join now buttons have same xpaths
+        try:
+            ask_to_join_button = WebDriverWait(self.driver, 15).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[jsname="Qx7uuf"]'))
+            )
+            ask_to_join_button.click()
+            print("Clicked on 'Ask to Join'")
+        except TimeoutException:
+            print("Ask to Join button not found.")
+
+        # Record audio
         AudioRecorder().get_audio(audio_path, duration)
-
- 
-
+        print("Audio recording completed.")
 
 def main():
-    temp_dir = tempfile.mkdtemp()
-    audio_path = os.path.join(temp_dir, "output.wav")
-    # Duration for bot to record audio
-    meet_link = 'https://meet.google.com/jwc-kwyy-ozq'
+    # Set a unified output directory
+    output_dir = "output_files"
+    os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+    audio_path = os.path.join(output_dir, "output.wav")  # Audio file path in output_dir
+
+    # Meeting link and audio duration for recording
+    meet_link = 'https://meet.google.com/via-dfob-tud'
     duration = 60
+
+    # Initialize Google Meet bot
     obj = JoinGoogleMeet()
     obj.Glogin()
     obj.turnOffMicCam(meet_link)
-    obj.AskToJoin(audio_path, duration)
-    SpeechToText().transcribe(audio_path)
+    obj.AskToJoin(audio_path, duration)  # Record audio and join the meeting
 
+    # Transcription and summary generation after meeting ends
+    speech_to_text = SpeechToText(output_dir=output_dir)
+    speech_to_text.transcribe(audio_path)  # Generate transcription and save JSON in output_dir
 
-#call the main function
+# Run the main function
 if __name__ == "__main__":
     main()

@@ -1,175 +1,143 @@
-from openai import OpenAI
-import json
 import os
 import subprocess
-import tempfile
 import datetime
-
+import json
+from openai import OpenAI, OpenAIError
 
 class SpeechToText:
-    def __init__(self):
-        self.client = OpenAI(
-            # defaults to os.environ.get("OPENAI_API_KEY")
-            api_key= os.environ.get("OPENAI_API_KEY"),
-        )
-        self.MAX_AUDIO_SIZE_BYTES = 20 * 1024 * 1024
-
+    def __init__(self, output_dir="output_files"):
+        # Load API key from environment variable
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
+        
+        self.client = OpenAI(api_key=api_key)
+        self.MAX_AUDIO_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB max audio size
+        self.output_dir = output_dir
+        
+        # Ensure the output directory exists
+        os.makedirs(self.output_dir, exist_ok=True)
 
     def get_file_size(self, file_path):
         return os.path.getsize(file_path)
 
-
     def get_audio_duration(self, audio_file_path):
-        result = subprocess.run(['ffprobe', '-i', audio_file_path, '-show_entries', 'format=duration', '-v', 'quiet', '-of', 'csv=%s' % ("p=0")], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        return float(result.stdout)
-
+        try:
+            result = subprocess.run(
+                ['ffprobe', '-i', audio_file_path, '-show_entries', 'format=duration', '-v', 'quiet', '-of', 'csv=p=0'],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            )
+            return float(result.stdout)
+        except Exception as e:
+            print(f"Error getting audio duration: {e}")
+            return None
 
     def resize_audio_if_needed(self, audio_file_path):
         audio_size = self.get_file_size(audio_file_path)
         if audio_size > self.MAX_AUDIO_SIZE_BYTES:
-            # Calculate a reasonable duration reduction
             current_duration = self.get_audio_duration(audio_file_path)
+            if current_duration is None:
+                return audio_file_path  # If duration check fails, skip resizing
+
             target_duration = current_duration * self.MAX_AUDIO_SIZE_BYTES / audio_size
-            
-            # Create a temporary directory for storing compressed audio
-            temp_dir = tempfile.mkdtemp()
-            print(f"Compressed audio will be stored in {temp_dir}")
-            
-            # Generate a unique filename based on current timestamp
-            compressed_audio_path = os.path.join(temp_dir, f'compressed_audio_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}.wav')
-            
-            # Use ffmpeg to compress the audio file
-            subprocess.run(['ffmpeg', '-i', audio_file_path, '-ss', '0', '-t', str(target_duration), compressed_audio_path])
-            
-            return compressed_audio_path
+            compressed_audio_path = os.path.join(
+                self.output_dir, f'compressed_audio_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}.wav'
+            )
+
+            print(f"Resizing audio to target duration {target_duration}s")
+            result = subprocess.run(
+                ['ffmpeg', '-i', audio_file_path, '-ss', '0', '-t', str(target_duration), compressed_audio_path]
+            )
+            if result.returncode == 0:
+                print(f"Audio resized and saved to {compressed_audio_path}")
+                return compressed_audio_path
+            else:
+                print("Audio resizing failed.")
         return audio_file_path
 
-
-
     def transcribe_audio(self, audio_file_path):
-        with open(audio_file_path, 'rb') as audio_file:
-            transcript = self.client.audio.translations.create(
-                file=audio_file,
-                model="whisper-1",
-            )
-            print("Transcribe: Done")
+        try:
+            with open(audio_file_path, 'rb') as audio_file:
+                transcript = self.client.audio.translations.create(
+                    file=audio_file,
+                    model="whisper-1",
+                )
+            print("Transcription complete.")
             return transcript.text
-
-
+        except OpenAIError as e:
+            print(f"Error during transcription: {e}")
+            return None
 
     def abstract_summary_extraction(self, transcription):
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a highly skilled AI trained in language comprehension and summarization. I would like you to read the following text and summarize it into a concise abstract paragraph. Aim to retain the most important points, providing a coherent and readable summary that could help a person understand the main points of the discussion without needing to read the entire text. Please avoid unnecessary details or tangential points."
-                },
-                {
-                    "role": "user",
-                    "content": transcription
-                }
-            ]
+        return self._chat_request(
+            transcription,
+            "Summarize the following text into a concise abstract paragraph."
         )
-        print("Summary: Done")
-        return response.choices[0].message.content
-
-
 
     def key_points_extraction(self, transcription):
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a proficient AI with a specialty in distilling information into key points. Based on the following text, identify and list the main points that were discussed or brought up. These should be the most important ideas, findings, or topics that are crucial to the essence of the discussion. Your goal is to provide a list that someone could read to quickly understand what was talked about."
-                },
-                {
-                    "role": "user",
-                    "content": transcription
-                }
-            ]
+        return self._chat_request(
+            transcription,
+            "Identify and list the main points discussed in the following text."
         )
-        print("Key Points: Done")
-        return response.choices[0].message.content
-
-
-
 
     def action_item_extraction(self, transcription):
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an AI expert in analyzing conversations and extracting action items. Please review the text and identify any tasks, assignments, or actions that were agreed upon or mentioned as needing to be done. These could be tasks assigned to specific individuals, or general actions that the group has decided to take. Please list these action items clearly and concisely."
-                },
-                {
-                    "role": "user",
-                    "content": transcription
-                }
-            ]
+        return self._chat_request(
+            transcription,
+            "List any action items discussed in the following text."
         )
-        print("Action Items: Done")
-        return response.choices[0].message.content
-
 
     def sentiment_analysis(self, transcription):
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "As an AI with expertise in language and emotion analysis, your task is to analyze the sentiment of the following text. Please consider the overall tone of the discussion, the emotion conveyed by the language used, and the context in which words and phrases are used. Indicate whether the sentiment is generally positive, negative, or neutral, and provide brief explanations for your analysis where possible."
-                },
-                {
-                    "role": "user",
-                    "content": transcription
-                }
-            ]
+        return self._chat_request(
+            transcription,
+            "Analyze the sentiment of the following text."
         )
-        print("Sentiment: Done")
-        return response.choices[0].message.content
+
+    def _chat_request(self, transcription, prompt):
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4",
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": transcription}
+                ]
+            )
+            print(f"{prompt} - Completed")
+            return response.choices[0].message.content
+        except OpenAIError as e:
+            print(f"Error during chat request: {e}")
+            return None
 
     def meeting_minutes(self, transcription):
-        abstract_summary = self.abstract_summary_extraction(transcription)
-        key_points = self.key_points_extraction(transcription)
-        action_items = self.action_item_extraction(transcription)
-        sentiment = self.sentiment_analysis(transcription)
         return {
-            'abstract_summary': abstract_summary,
-            'key_points': key_points,
-            'action_items': action_items,
-            'sentiment': sentiment
+            'abstract_summary': self.abstract_summary_extraction(transcription),
+            'key_points': self.key_points_extraction(transcription),
+            'action_items': self.action_item_extraction(transcription),
+            'sentiment': self.sentiment_analysis(transcription)
         }
 
-
-
-    #function to store dictonary in json file in give path
     def store_in_json_file(self, data):
-        temp_dir = tempfile.mkdtemp()
-        file_path = os.path.join(temp_dir, f'meeting_data_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}.json')
-        print(f"JSON file path: {file_path}")
+        # Save JSON file in the same directory as the output audio
+        file_path = os.path.join(self.output_dir, f'meeting_data_{datetime.datetime.now().strftime("%Y%m%d%H%M%S")}.json')
+        print(f"Storing JSON file at: {file_path}")
         with open(file_path, 'w') as f:
             json.dump(data, f)
         print("JSON file created successfully.")
 
-
-
     def transcribe(self, audio_file_path):
+        # Resize if needed and transcribe
         audio_file_path = self.resize_audio_if_needed(audio_file_path)
         transcription = self.transcribe_audio(audio_file_path)
-        summary = self.meeting_minutes(transcription)
-        self.store_in_json_file(summary)
+        
+        if transcription:
+            # Generate meeting minutes and save them in JSON format
+            summary = self.meeting_minutes(transcription)
+            self.store_in_json_file(summary)
 
-    
-    
-        print(f"Abstract Summary: {summary['abstract_summary']}")
-        print(f"Key Points: {summary['key_points']}")
-        print(f"Action Items: {summary['action_items']}")
-        print(f"Sentiment: {summary['sentiment']}")
-
+            # Display summaries
+            print(f"Abstract Summary: {summary['abstract_summary']}")
+            print(f"Key Points: {summary['key_points']}")
+            print(f"Action Items: {summary['action_items']}")
+            print(f"Sentiment: {summary['sentiment']}")
+        else:
+            print("Transcription failed. Meeting minutes not generated.")
