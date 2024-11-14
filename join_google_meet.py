@@ -79,9 +79,40 @@ class JoinGoogleMeet:
         except TimeoutException:
             print("Camera button not found or failed to click.")
 
+    # def ask_to_join(self):
+    #     """Click on 'Ask to Join' if not automatically admitted."""
+    #     try:
+    #         ask_to_join_button = WebDriverWait(self.driver, 15).until(
+    #             EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[jsname="Qx7uuf"]'))
+    #         )
+    #         ask_to_join_button.click()
+    #         print("Clicked on 'Ask to Join' button.")
+
+    #         # Wait until joined or admitted
+    #         WebDriverWait(self.driver, 60).until(
+    #             EC.presence_of_element_located((By.CSS_SELECTOR, 'div[jscontroller="CkHiJd"]'))
+    #         )
+    #         print("Successfully joined the meeting.")
+    #     except TimeoutException:
+    #         print("Failed to join the meeting. Waiting for admission may be required.")
+    #     except NoSuchElementException:
+    #         print("Ask to Join button not found.")
+
+
     def ask_to_join(self):
-        """Click on 'Ask to Join' if not automatically admitted."""
         try:
+            # Check if the name input field is present and fill it if found
+            try:
+                name_input = WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'input[jsname="YPqjbf"]'))
+                )
+                name_input.clear()
+                name_input.send_keys("Bot")
+                print("Name field found and filled.")
+            except TimeoutException:
+                print("Name input field not found or not required.")
+
+            # Proceed to click on 'Ask to Join'
             ask_to_join_button = WebDriverWait(self.driver, 15).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[jsname="Qx7uuf"]'))
             )
@@ -97,9 +128,8 @@ class JoinGoogleMeet:
             print("Failed to join the meeting. Waiting for admission may be required.")
         except NoSuchElementException:
             print("Ask to Join button not found.")
-
+            
     def check_participants(self):
-        """Check the number of participants in the meeting."""
         try:
             participant_count_element = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'div.gFyGKf.BN1Lfc .uGOf1d'))
@@ -112,7 +142,6 @@ class JoinGoogleMeet:
             return 1  # Default to 1 if participant count cannot be determined
 
     def leave_meeting(self):
-        """Leave the meeting if only one participant (the bot) remains."""
         try:
             leave_button = self.driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Leave call"]')
             leave_button.click()
